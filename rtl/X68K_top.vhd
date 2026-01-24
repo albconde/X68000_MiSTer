@@ -129,7 +129,10 @@ port(
 	
 	rstn		:in std_logic;
 	dHMode      :in std_logic_vector(1 downto 0) := "11";
-	dVMode      :in std_logic := '1'
+	dVMode      :in std_logic := '1';
+	-- Debug: layer enable bits (directly active low from OSD, active high enables layer)
+	-- bit 0 = text, bit 1 = graphic, bit 2 = sprite, bit 3 = BG0, bit 4 = BG1
+	dLayers     :in std_logic_vector(4 downto 0) := "00000"
 );
 end X68K_top;
 
@@ -287,8 +290,11 @@ signal	spreg_DISPEN	:std_logic;
 signal	spreg_BG1TXSEL	:std_logic_vector(1 downto 0);
 signal	spreg_BG0TXSEL	:std_logic_vector(1 downto 0);
 signal	spreg_BGON		:std_logic_vector(1 downto 0);
+signal	spreg_HDISP		:std_logic_vector(5 downto 0);
+signal	spreg_VDISP		:std_logic_vector(7 downto 0);
 signal	spreg_VRES		:std_logic_vector(1 downto 0);
 signal	spreg_HRES		:std_logic_vector(1 downto 0);
+signal	bg_chr16		:std_logic;
  --ram
 signal	spram_rdat	:std_logic_vector(15 downto 0);
 signal	spram_doe	:std_logic;
@@ -302,7 +308,8 @@ signal	bg_VR		:std_logic;
 signal	bg_HR		:std_logic;
 signal	bg_COLOR	:std_logic_vector(3 downto 0);
 signal	bg_PAT		:std_logic_vector(7 downto 0);
-
+signal	bgen_eff	:std_logic_vector(1 downto 0);
+signal	bg1_allow	:std_logic;
 --Disk emu
 signal	dem_rstn	:std_logic;
 signal	dem_initdone	:std_logic;
@@ -1662,6 +1669,8 @@ port(
 	vtotal	:in std_logic_vector(9 downto 0);
 	vvbgn	:in std_logic_vector(9 downto 0);
 	vvend	:in std_logic_vector(9 downto 0);
+	sp_hdisp :in std_logic_vector(5 downto 0);
+	sp_vdisp :in std_logic_vector(7 downto 0);
 	
 	addrx	:out std_logic_vector(9 downto 0);
 	addry	:out std_logic_vector(9 downto 0);
@@ -3267,9 +3276,9 @@ begin
 		memres		=>vr_GR_SIZE,		--0:512x512 1:1024x1024
 		hres	=>out_HMODE,
 		vres	=>out_VMODE(0),
-		txten	=>vr_TXTEN,
-		grpen	=>vr_GREN,
-		spren	=>vr_SPREN,
+		txten	=>vr_TXTEN and not dLayers(0),
+		grpen	=>vr_GREN and not dLayers(1),
+		spren	=>vr_SPREN and not dLayers(2),
 --		txten	=>'1',
 --		grpen	=>'1',
 --		spren	=>'1',
@@ -3301,6 +3310,8 @@ begin
 		vtotal	=>out_vtotal,
 		vvbgn	=>out_vvbgn,
 		vvend	=>out_vvend,
+		sp_hdisp=>spreg_HDISP,
+		sp_vdisp=>spreg_VDISP,
 		
 		addrx	=>spr_x,
 		addry	=>spr_y,
@@ -3362,9 +3373,17 @@ begin
 	
 	iowait_rcpy	<=vr_rcpybgn and vr_rcpybusy;
 	dsprbgen<=	"11";
+
+	bg1_allow <= '1' when spreg_HRES="00" else '0';
+	bg_chr16 <= '0' when spreg_HRES="00" else '1';
+	bgen_eff(0) <= spreg_BGON(0) and not dLayers(3);
+	bgen_eff(1) <= spreg_BGON(1) and not dLayers(4) and bg1_allow;
+
+
 	sprite	:spritec port map(
 		hres	=>spreg_HRES(0),
-		bgen	=>spreg_BGON,
+		--bgen	=>spreg_BGON and not dLayers(4 downto 3),
+		bgen	=>bgen_eff,
 		bg0asel	=>spreg_BG0TXSEL(0),
 		bg1asel	=>spreg_BG1TXSEL(0),
 		spren	=>spreg_DISPEN,
@@ -3433,8 +3452,8 @@ begin
 		BG0TXSEL=>spreg_BG0TXSEL,
 		BGON	=>spreg_BGON,
 		HTOTAL	=>open,
-		HDISP	=>open,
-		VDISP	=>open,
+		HDISP	=>spreg_HDISP,
+		VDISP	=>spreg_VDISP,
 		LH		=>open,
 		--VRES	=>spreg_VRES,
 		HRES	=>spreg_HRES,

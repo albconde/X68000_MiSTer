@@ -116,6 +116,8 @@ port(
 	vtotal	:in std_logic_vector(9 downto 0);
 	vvbgn	:in std_logic_vector(9 downto 0);
 	vvend	:in std_logic_vector(9 downto 0);
+	sp_hdisp :in std_logic_vector(5 downto 0);
+	sp_vdisp :in std_logic_vector(7 downto 0);
 	
 	addrx	:out std_logic_vector(9 downto 0);
 	addry	:out std_logic_vector(9 downto 0);
@@ -321,6 +323,19 @@ signal semitrans:std_logic;
 signal gpriobit:std_logic;
 signal tpriobit:std_logic;
 
+signal spr_x_adj_u  :unsigned(9 downto 0);
+signal spr_y_adj_u  :unsigned(9 downto 0);
+
+signal vheight      :std_logic_vector(9 downto 0);
+signal double_scan  :std_logic;
+signal is_480       :std_logic;
+signal early_vblank :std_logic;
+
+signal hvbgn_px_u   :unsigned(9 downto 0);
+signal bg_hstart_u  :unsigned(9 downto 0);
+signal vvbgn_mod_u  :unsigned(9 downto 0);
+signal bg_vstart_u  :unsigned(9 downto 0);
+
 constant azero	:std_logic_vector(arange-1 downto 0)	:=(others=>'0');
 begin
 	-- g_ddaten<=	'1' when g4_ddat/=x"0" and gmode="00" else
@@ -348,9 +363,23 @@ begin
 		end if;
 	end process;
 
+	hvbgn_px_u  <= resize(unsigned(hvbgn), 10) sll 3;
+	bg_hstart_u <= (((resize(unsigned(sp_hdisp), 10) - to_unsigned(4, 10)) sll 3) + to_unsigned(1, 10))
+	              when (unsigned(sp_hdisp) >= to_unsigned(4, 6)) else hvbgn_px_u;
+	spr_x_adj_u <= hvbgn_px_u - bg_hstart_u;
+
+	vheight <= vvend - vvbgn;
+	double_scan <= '1' when (vres='0' and hfreq='1') else '0';
+	is_480 <= '1' when vheight = "000111100000" else '0';
+	early_vblank <= '1' when (double_scan='1' and is_480='1' and unsigned(vvbgn) < 30) else '0';
+
 	-- 256 height in high freqency will doublescan the image
 	vaddrmod<= '0' & vaddr(9 downto 1)	when vres='0' and hfreq='1' else vaddr; -- and hfreq='1'
 	haddrmod<= haddr;
+
+	vvbgn_mod_u <= (resize(unsigned(vvbgn), 10) srl 1) when double_scan='1' else resize(unsigned(vvbgn), 10);
+	bg_vstart_u  <= (resize(unsigned(sp_vdisp), 10) srl 1) when double_scan='1' else resize(unsigned(sp_vdisp), 10);
+	spr_y_adj_u  <= vvbgn_mod_u - bg_vstart_u;
 
 	thaddr_offset<=t_hoffset+haddrmod;
 	tvaddr_offset<=t_voffset+vaddrmod;
@@ -644,16 +673,28 @@ begin
 					lvviden<=vviden;
 					raster<=raster+"0000000001";
 					hviden<='1';
-
+					
+					if(early_vblank='1') then
+						vaddr<=vaddr+"0000000001";
+					end if;
+					
 					if (raster = vvend-"0000000001") then
 						vviden<='0';
 					end if;
 					if (vblank = '0') then
-						vaddr<=vaddr+"0000000001";
+						if(early_vblank='0') then
+							vaddr<=vaddr+"0000000001";
+						end if;
 						g0_clear<=	gclrpage(0) and gclrbusyb;
 						g1_clear<=	gclrpage(1) and gclrbusyb;
 						g2_clear<=	gclrpage(2) and gclrbusyb;
 						g3_clear<=	gclrpage(3) and gclrbusyb;
+						nxt_trd<=	ten;
+						nxt_g0rd<=	g0en and (not (gclrpage(0) and gclrbusyb));
+						nxt_g1rd<=	g1en and (not (gclrpage(1) and gclrbusyb));
+						nxt_g2rd<=	g2en and (not (gclrpage(2) and gclrbusyb));
+						nxt_g3rd<=	g3en and (not (gclrpage(3) and gclrbusyb));
+				    elsif (vaddr = "0000000000") then
 						nxt_trd<=	ten;
 						nxt_g0rd<=	g0en and (not (gclrpage(0) and gclrbusyb));
 						nxt_g1rd<=	g1en and (not (gclrpage(1) and gclrbusyb));
@@ -701,8 +742,9 @@ begin
 	rastnum<=raster;
 	rint<='1' when rintline=rastnum else '0';
 	
-	addrx<=haddrmod(9 downto 0);
-	addry<=vaddrmod(9 downto 0);
+	addrx<=std_logic_vector(unsigned(haddrmod(9 downto 0)) + spr_x_adj_u + 1);
+	addry<=std_logic_vector(unsigned(vaddrmod(9 downto 0)) + spr_y_adj_u + 1) when (vheight < "000111100000") else
+	       std_logic_vector(unsigned(vaddrmod(9 downto 0)) + spr_y_adj_u);
 
 	sprio<= '1' when bp='1' and hp='0' else '0';
 	-- if the address of the next highest palette is 0, then the next lowest data will be valid.

@@ -258,6 +258,14 @@ parameter CONF_STR = {
 	"R8,Power Button;",
 	"R0,Reset;",
 	"-;",
+	"P6,Debug Layers;",
+	"P6-;",
+	"P6oL,Text Layer,On,Off;",
+	"P6oM,Graphic Layer,On,Off;",
+	"P6oN,Sprite Layer,On,Off;",
+	"P6oO,BG0 Layer,On,Off;",
+	"P6oP,BG1 Layer,On,Off;",
+	"-;",
 	"J,Button 1,Button 2,Run,Select,Button 3,Button 4,Button 5,Button 6;",
 	"jn,A,B,Run,Select,X,Y,L,R;",
 	"jp,A,B,Run,Select,X,Y,L,R;",
@@ -848,7 +856,8 @@ X68K_top X68K_top
 
 	.rstn(reset_n & ~reset),
 	.dHMode(status[45:44]),
-	.dVMode(status[46])
+	.dVMode(status[46]),
+	.dLayers(status[57:53])   // Debug: oL=Text, oM=Graphic, oN=Sprite, oO=BG0, oP=BG1
 );
 
 wire ldr_ack;
