@@ -50,6 +50,17 @@ port(
    pMemAdr     : out std_logic_vector(12 downto 0);    -- SD-RAM Address
    pMemDat     : inout std_logic_vector(15 downto 0);  -- SD-RAM Data
 
+	DDRAM_CLK        : out std_logic;
+	DDRAM_BURSTCNT   : out std_logic_vector(7 downto 0);
+	DDRAM_ADDR       : out std_logic_vector(28 downto 0);
+	DDRAM_DIN        : out std_logic_vector(63 downto 0);
+	DDRAM_BE         : out std_logic_vector(7 downto 0);
+	DDRAM_RD         : out std_logic;
+	DDRAM_WE         : out std_logic;
+	DDRAM_DOUT       : in  std_logic_vector(63 downto 0);
+	DDRAM_DOUT_READY : in  std_logic;
+	DDRAM_BUSY       : in  std_logic;
+
 	-- ROM image loader
 	ldr_addr		:in std_logic_vector(19 downto 0);
 	ldr_aen		:in std_logic;
@@ -145,17 +156,6 @@ port(
 	-- Disk format runtime selector: '0'=D88, '1'=XDF/DIM
 	disk_mode   :in std_logic := '0';
 
-	-- DDR3 CPU main-RAM interface
-	ddr_addr    :out std_logic_vector(22 downto 0);
-	ddr_din     :out std_logic_vector(15 downto 0);
-	ddr_dout    :in std_logic_vector(15 downto 0) := (others=>'0');
-	ddr_rd      :out std_logic;
-	ddr_wr      :out std_logic_vector(1 downto 0);
-	ddr_ack     :in std_logic := '0';
-	ddr_ready   :in std_logic := '1';
-
-	-- Select CPU main-RAM backend: DDR3 (1) or SDRAM (0)
-	use_ddr3    :in std_logic := '1';
 	sxsi_inject :in std_logic := '0';
 	vis_mem     :in std_logic_vector(3 downto 0) := "0000"
 );
@@ -164,6 +164,9 @@ end X68K_top;
 architecture rtl of X68K_top is
 
 constant brsize		:integer	:=7;
+-- Raster-copy operates in fixed 256-byte chunks. Keep its geometry
+-- independent from the SDRAM CPU/cache row size.
+constant rcpy_brsize	:integer	:=7;
 constant RAMAWIDTH	:integer	:=25;	--per byte
 
 signal	srstn	:std_logic;
@@ -215,15 +218,18 @@ signal	ram_rmw	:std_logic_vector(1 downto 0);
 signal	ram_rmwmask	:std_logic_vector(15 downto 0);
 signal	ram_ack	:std_logic;
 signal	mem_ram_ack	:std_logic;
-signal	is_mram	:std_logic;
-signal	is_mram_r	:std_logic;
 signal	sdram_ram_rd	:std_logic;
 signal	sdram_ram_wr	:std_logic_vector(1 downto 0);
 signal	sdram_ram_rmw	:std_logic_vector(1 downto 0);
+signal	tv_is_tvram	:std_logic;
+signal	tv_cpu_ack	:std_logic;
+signal	tv_cpu_rdat	:std_logic_vector(15 downto 0);
+signal	tv_cpu_wr	:std_logic_vector(1 downto 0);
+signal	tv_cpu_rmw	:std_logic_vector(1 downto 0);
 
 constant trambase	:std_logic_vector(RAMAWIDTH-1 downto 0)	:="0"& x"e00000";
-signal	ram_cpys:std_logic_vector(RAMAWIDTH-brsize-2 downto 0);
-signal	ram_cpyd:std_logic_vector(RAMAWIDTH-brsize-2 downto 0);
+signal	ram_cpys:std_logic_vector(RAMAWIDTH-rcpy_brsize-2 downto 0);
+signal	ram_cpyd:std_logic_vector(RAMAWIDTH-rcpy_brsize-2 downto 0);
 signal	ram_cplane	:std_logic_vector(3 downto 0);
 signal	ram_cpy		:std_logic;
 signal	ram_cpya:std_logic;
@@ -584,10 +590,18 @@ signal	bram_g00_rdat	:std_logic_vector(15 downto 0);
 signal	bram_g10_rdat	:std_logic_vector(15 downto 0);
 signal	bram_g01_rdat	:std_logic_vector(15 downto 0);
 signal	bram_g11_rdat	:std_logic_vector(15 downto 0);
+signal	bram_g02_rdat	:std_logic_vector(15 downto 0);
+signal	bram_g03_rdat	:std_logic_vector(15 downto 0);
+signal	bram_g12_rdat	:std_logic_vector(15 downto 0);
+signal	bram_g13_rdat	:std_logic_vector(15 downto 0);
 signal	sdram_g00_rdat	:std_logic_vector(15 downto 0);
 signal	sdram_g10_rdat	:std_logic_vector(15 downto 0);
 signal	sdram_g01_rdat	:std_logic_vector(15 downto 0);
 signal	sdram_g11_rdat	:std_logic_vector(15 downto 0);
+signal	sdram_g02_rdat	:std_logic_vector(15 downto 0);
+signal	sdram_g03_rdat	:std_logic_vector(15 downto 0);
+signal	sdram_g12_rdat	:std_logic_vector(15 downto 0);
+signal	sdram_g13_rdat	:std_logic_vector(15 downto 0);
 signal	g11_addr	:std_logic_vector(RAMAWIDTH-2 downto 0);
 signal	g11_rd		:std_logic;
 signal	g11_rdat	:std_logic_vector(15 downto 0);
@@ -623,14 +637,11 @@ signal	gvclr_timer		:integer range 0 to 1023;
 signal	mc_g0_caddr		:std_logic_vector(RAMAWIDTH-2 downto 8);
 signal	mc_g0_clear		:std_logic;
 
--- GVRAM BRAM controller signals (chips 0,1 in BRAM)
+-- Canonical GVRAM split by physical word address: A17=0 BRAM, A17=1 SDRAM.
 signal	gv_is_gvram : std_logic;
-signal	gv_is_bram_page : std_logic;
-signal	gv_br_cpu_wr : std_logic;
-signal	gv_wr_sdram_wait : std_logic;
+signal	gv_is_bram_word : std_logic;
 signal	gv_cpu_ack  : std_logic;
 signal	gv_cpu_rdat : std_logic_vector(15 downto 0);
-signal	gv_use_sdram : std_logic;
 
 --video registers
 signal	vr_hfreq	:std_logic;
@@ -1049,6 +1060,50 @@ port(
 );
 end component;
 
+component tvram_ddr
+port(
+	rclk              : in  std_logic;
+	vclk              : in  std_logic;
+	ram_ce            : in  std_logic;
+	rst_n             : in  std_logic;
+	cpu_addr          : in  std_logic_vector(17 downto 0);
+	cpu_wdat          : in  std_logic_vector(15 downto 0);
+	cpu_rd            : in  std_logic;
+	cpu_wr            : in  std_logic_vector(1 downto 0);
+	cpu_rmw           : in  std_logic_vector(1 downto 0);
+	cpu_rmwmask       : in  std_logic_vector(15 downto 0);
+	cpu_rdat          : out std_logic_vector(15 downto 0);
+	cpu_ack           : out std_logic;
+	cpy_src           : in  std_logic_vector(16 downto 0);
+	cpy_dst           : in  std_logic_vector(16 downto 0);
+	cpy_plane         : in  std_logic_vector(3 downto 0);
+	cpy_req           : in  std_logic;
+	cpy_ack           : out std_logic;
+	t0_addr           : in  std_logic_vector(21 downto 0);
+	t0_rd             : in  std_logic;
+	t0_rdat0          : out std_logic_vector(15 downto 0);
+	t0_rdat1          : out std_logic_vector(15 downto 0);
+	t0_rdat2          : out std_logic_vector(15 downto 0);
+	t0_rdat3          : out std_logic_vector(15 downto 0);
+	t1_addr           : in  std_logic_vector(21 downto 0);
+	t1_rd             : in  std_logic;
+	t1_rdat0          : out std_logic_vector(15 downto 0);
+	t1_rdat1          : out std_logic_vector(15 downto 0);
+	t1_rdat2          : out std_logic_vector(15 downto 0);
+	t1_rdat3          : out std_logic_vector(15 downto 0);
+	DDRAM_CLK         : out std_logic;
+	DDRAM_BURSTCNT    : out std_logic_vector(7 downto 0);
+	DDRAM_ADDR        : out std_logic_vector(28 downto 0);
+	DDRAM_DIN         : out std_logic_vector(63 downto 0);
+	DDRAM_BE          : out std_logic_vector(7 downto 0);
+	DDRAM_RD          : out std_logic;
+	DDRAM_WE          : out std_logic;
+	DDRAM_DOUT        : in  std_logic_vector(63 downto 0);
+	DDRAM_DOUT_READY  : in  std_logic;
+	DDRAM_BUSY        : in  std_logic
+);
+end component;
+
 component gvram_ctrl
 generic(
 	awidth	: integer := 24
@@ -1062,6 +1117,14 @@ port(
 	g01_rd   : in  std_logic;
 	g01_rdat : out std_logic_vector(15 downto 0);
 	g01_ack  : out std_logic;
+	g02_addr : in  std_logic_vector(awidth-1 downto 0);
+	g02_rd   : in  std_logic;
+	g02_rdat : out std_logic_vector(15 downto 0);
+	g02_ack  : out std_logic;
+	g03_addr : in  std_logic_vector(awidth-1 downto 0);
+	g03_rd   : in  std_logic;
+	g03_rdat : out std_logic_vector(15 downto 0);
+	g03_ack  : out std_logic;
 	g10_addr : in  std_logic_vector(awidth-1 downto 0);
 	g10_rd   : in  std_logic;
 	g10_rdat : out std_logic_vector(15 downto 0);
@@ -1070,14 +1133,26 @@ port(
 	g11_rd   : in  std_logic;
 	g11_rdat : out std_logic_vector(15 downto 0);
 	g11_ack  : out std_logic;
+	g12_addr : in  std_logic_vector(awidth-1 downto 0);
+	g12_rd   : in  std_logic;
+	g12_rdat : out std_logic_vector(15 downto 0);
+	g12_ack  : out std_logic;
+	g13_addr : in  std_logic_vector(awidth-1 downto 0);
+	g13_rd   : in  std_logic;
+	g13_rdat : out std_logic_vector(15 downto 0);
+	g13_ack  : out std_logic;
 	g0_caddr : in  std_logic_vector(awidth-1 downto 8);
 	g0_clear : in  std_logic;
 	g1_caddr : in  std_logic_vector(awidth-1 downto 8);
 	g1_clear : in  std_logic;
+	g2_caddr : in  std_logic_vector(awidth-1 downto 8);
+	g2_clear : in  std_logic;
+	g3_caddr : in  std_logic_vector(awidth-1 downto 8);
+	g3_clear : in  std_logic;
 	cpu_addr    : in  std_logic_vector(17 downto 0);
 	cpu_wdat    : in  std_logic_vector(15 downto 0);
 	cpu_rdat    : out std_logic_vector(15 downto 0);
-	cpu_wr      : in  std_logic;
+	cpu_wr      : in  std_logic_vector(1 downto 0);
 	cpu_rd      : in  std_logic;
 	cpu_rmw     : in  std_logic_vector(1 downto 0);
 	cpu_rmwmask : in  std_logic_vector(15 downto 0);
@@ -2727,7 +2802,7 @@ begin
 
 --	fdcclk<=pClk50M;
 	dem_rstn<=plllock and pwr_rstn;
-	srstn<=plllock and rstn and pwr_rstn and ldr_done and dem_initdone and ddr_ready and (not inj_busy);
+	srstn<=plllock and rstn and pwr_rstn and ldr_done and dem_initdone and (not inj_busy);
 	vid_rstn<=plllock and pwr_rstn and ram_inidone;
 
 	pwr	:pwrcont  port map(
@@ -3044,55 +3119,28 @@ begin
 	
 	ram_addrw<="0" & ram_addr;
 
-	-- DDR3 CPU main-RAM routing:
-	--   $000000-$01FFFF (vectors/stack/sysvars) -> SDRAM
-	--   $020000-$BFFFFF (main RAM, non-graphics) -> DDR3 (when use_ddr3='1')
-	--   $C00000-$FFFFFF (GVRAM/TVRAM/ROM) -> SDRAM
-	is_mram <= '1' when use_ddr3 = '1'
-	                and ram_addr(22 downto 21) /= "11"
-	                and ram_addr(22 downto 17) /= "000000"
-	            else '0';
-
-	process(sysclk)
-	begin
-		if rising_edge(sysclk) then
-			is_mram_r <= is_mram;
-		end if;
-	end process;
-
-	ddr_addr <= ram_addr;
-	ddr_din  <= ram_wdat;
-	ddr_rd   <= ram_rd  when is_mram = '1' else '0';
-	ddr_wr   <= ram_wr  when is_mram = '1' else "00";
-
-	sdram_ram_rd  <= ram_rd  when is_mram = '0' else '0';
-	sdram_ram_wr  <= ram_wr  when is_mram = '0' else "00";
-	sdram_ram_rmw <= ram_rmw when is_mram = '0' else "00";
+	-- TVRAM (E00000-E7FFFF byte address, 700000-73FFFF word address) uses
+	-- DDR3. Main RAM uses SDRAM; GVRAM is split by physical address bit 17.
+	tv_is_tvram <= '1' when ram_addr(22 downto 18) = "11100" else '0';
+	tv_cpu_wr    <= ram_wr  when tv_is_tvram = '1' else "00";
+	tv_cpu_rmw   <= ram_rmw when tv_is_tvram = '1' else "00";
 	
-	-- GVRAM address decode: ram_addr(22:18) = "11101" = g_base upper bits
 	gv_is_gvram <= '1' when ram_addr(22 downto 18) = "11101" else '0';
-	gv_is_bram_page <= '1' when gv_is_gvram = '1' and vr_col = "01" and m_addr(20 downto 19) = "00" else
-	                   '1' when gv_is_gvram = '1' and vr_col /= "01" and m_addr(20) = '0' else
-	                   '0';
-	gv_br_cpu_wr <= ram_wr(0) when vr_col = "01" else
-	                (ram_wr(0) or ram_wr(1));
-	ram_rdat <= ddr_dout     when is_mram = '1' else
-	            gv_cpu_rdat when gv_is_bram_page = '1' else
-	            mem_ram_rdat;
+	gv_is_bram_word <= gv_is_gvram and (not ram_addr(17));
 
-	gv_wr_sdram_wait <= '1' when gv_is_gvram = '1'
-	                         and (gv_use_sdram = '1' or vr_GFXBUF = '1')
-	                         and (sdram_ram_wr /= "00" or sdram_ram_rmw /= "00")
-	                    else '0';
-	ram_ack  <= ddr_ack      when is_mram_r = '1' else
-	            mem_ram_ack when gv_wr_sdram_wait = '1' else														 
-	            gv_cpu_ack  when gv_is_bram_page = '1' else
+	sdram_ram_rd  <= ram_rd  when tv_is_tvram = '0' and gv_is_bram_word = '0' else '0';
+	sdram_ram_wr  <= ram_wr  when tv_is_tvram = '0' and gv_is_bram_word = '0' else "00";
+	sdram_ram_rmw <= ram_rmw when tv_is_tvram = '0' and gv_is_bram_word = '0' else "00";
+
+	ram_rdat <= tv_cpu_rdat when tv_is_tvram = '1' else
+	            gv_cpu_rdat when gv_is_bram_word = '1' else
+	            mem_ram_rdat;
+	ram_ack  <= tv_cpu_ack when tv_is_tvram = '1' else
+	            gv_cpu_ack when gv_is_bram_word = '1' else
 	            mem_ram_ack;
 
-	gv_use_sdram <= vr_GR_SIZE or vr_GR_CMODE(1);
-
 	mc_g0_caddr <= gvclr_caddr when gvclr_active='1' else g0_caddr;
-	mc_g0_clear <= '1'          when gvclr_active='1' else g0_clear;
+	mc_g0_clear <= '1' when gvclr_active='1' else g0_clear;
 
 	process(sysclk) begin
 		if rising_edge(sysclk) then
@@ -3121,7 +3169,7 @@ begin
 		AWIDTH		=>24,
 		CAWIDTH		=>9,
 		BRSIZE		=>brsize,
-		BRBLOCKS		=>8,
+		BRBLOCKS		=>16,
 		CLKMHZ		=>RCFREQ,
 		REFINT			=>10,
 		REFCNT		=>64
@@ -3147,75 +3195,75 @@ begin
 		b_rmwmsk	=>ram_rmwmask,
 		b_ack		=>mem_ram_ack,
 		
-		b_csaddr	=>ram_cpys,
-		b_cdaddr	=>ram_cpyd,
-		b_cplane	=>ram_cplane,
-		b_cpy		=>ram_cpy,
-		b_cack		=>ram_cpya,
+		b_csaddr	=>(others=>'0'),
+		b_cdaddr	=>(others=>'0'),
+		b_cplane	=>(others=>'0'),
+		b_cpy		=>'0',
+		b_cack		=>open,
 
 		g00_addr	=>g00_addr,
-		g00_rd		=>g00_rd and gv_use_sdram,
+		g00_rd		=>g00_rd and g00_addr(17),
 		g00_rdat	=>sdram_g00_rdat,
 		--g00_ack		=>g00_ack,
 
 		g01_addr	=>g01_addr,
-		g01_rd		=>g01_rd and gv_use_sdram,
+		g01_rd		=>g01_rd and g01_addr(17),
 		g01_rdat	=>sdram_g01_rdat,
 		--g01_ack		=>g01_ack,
 
 		g02_addr	=>g02_addr,
-		g02_rd		=>g02_rd,
-		g02_rdat	=>g02_rdat,
+		g02_rd		=>g02_rd and g02_addr(17),
+		g02_rdat	=>sdram_g02_rdat,
 
 		g03_addr	=>g03_addr,
-		g03_rd		=>g03_rd,
-		g03_rdat	=>g03_rdat,
+		g03_rd		=>g03_rd and g03_addr(17),
+		g03_rdat	=>sdram_g03_rdat,
 
 		g10_addr	=>g10_addr,
-		g10_rd		=>g10_rd and gv_use_sdram,
+		g10_rd		=>g10_rd and g10_addr(17),
 		g10_rdat	=>sdram_g10_rdat,
 		--g10_ack		=>g10_ack,
 
 		g11_addr	=>g11_addr,
-		g11_rd		=>g11_rd and gv_use_sdram,
+		g11_rd		=>g11_rd and g11_addr(17),
 		g11_rdat	=>sdram_g11_rdat,
 		--g11_ack		=>g11_ack,
 
 		g12_addr	=>g12_addr,
-		g12_rd		=>g12_rd,
-		g12_rdat	=>g12_rdat,
+		g12_rd		=>g12_rd and g12_addr(17),
+		g12_rdat	=>sdram_g12_rdat,
 
 		g13_addr	=>g13_addr,
-		g13_rd		=>g13_rd,
-		g13_rdat	=>g13_rdat,
+		g13_rd		=>g13_rd and g13_addr(17),
+		g13_rdat	=>sdram_g13_rdat,
 
 		t0_addr		=>t0_addr,
-		t0_rd		=>t0_rd,
-		t0_rdat0	=>t0_rdat0,
-		t0_rdat1	=>t0_rdat1,
-		t0_rdat2	=>t0_rdat2,
-		t0_rdat3	=>t0_rdat3,
+		t0_rd		=>'0',
+		t0_rdat0	=>open,
+		t0_rdat1	=>open,
+		t0_rdat2	=>open,
+		t0_rdat3	=>open,
 		--t0_ack		=>t0_ack,
 		
 		t1_addr		=>t1_addr,
-		t1_rd		=>t1_rd,
-		t1_rdat0	=>t1_rdat0,
-		t1_rdat1	=>t1_rdat1,
-		t1_rdat2	=>t1_rdat2,
-		t1_rdat3	=>t1_rdat3,
+		t1_rd		=>'0',
+		t1_rdat0	=>open,
+		t1_rdat1	=>open,
+		t1_rdat2	=>open,
+		t1_rdat3	=>open,
 		--t1_ack		=>t1_ack,
 
 		g0_caddr	=>mc_g0_caddr,
-		g0_clear	=>mc_g0_clear,
+		g0_clear	=>mc_g0_clear and mc_g0_caddr(17),
 
 		g1_caddr	=>g1_caddr,
-		g1_clear	=>g1_clear,
+		g1_clear	=>g1_clear and g1_caddr(17),
 
 		g2_caddr	=>g2_caddr,
-		g2_clear	=>g2_clear,
+		g2_clear	=>g2_clear and g2_caddr(17),
 
 		g3_caddr	=>g3_caddr,
-		g3_clear	=>g3_clear,
+		g3_clear	=>g3_clear and g3_caddr(17),
 
 		gmode		=>vr_GR_CMODE,
 
@@ -3242,37 +3290,98 @@ begin
 		rstn		=>mem_rstn
 	);
 
-	-- GVRAM BRAM controller: chips 0,1 in BRAM (chips 2,3 stay in SDRAM via cachecont)
+	TVRAM_DDR_I : tvram_ddr port map(
+		rclk              => ramclk,
+		vclk              => vidclk,
+		ram_ce            => ram_ce,
+		rst_n             => mem_rstn,
+		cpu_addr          => ram_addr(17 downto 0),
+		cpu_wdat          => ram_wdat,
+		cpu_rd            => ram_rd and tv_is_tvram,
+		cpu_wr            => tv_cpu_wr,
+		cpu_rmw           => tv_cpu_rmw,
+		cpu_rmwmask       => ram_rmwmask,
+		cpu_rdat          => tv_cpu_rdat,
+		cpu_ack           => tv_cpu_ack,
+		cpy_src           => ram_cpys,
+		cpy_dst           => ram_cpyd,
+		cpy_plane         => ram_cplane,
+		cpy_req           => ram_cpy,
+		cpy_ack           => ram_cpya,
+		t0_addr           => t0_addr,
+		t0_rd             => t0_rd,
+		t0_rdat0          => t0_rdat0,
+		t0_rdat1          => t0_rdat1,
+		t0_rdat2          => t0_rdat2,
+		t0_rdat3          => t0_rdat3,
+		t1_addr           => t1_addr,
+		t1_rd             => t1_rd,
+		t1_rdat0          => t1_rdat0,
+		t1_rdat1          => t1_rdat1,
+		t1_rdat2          => t1_rdat2,
+		t1_rdat3          => t1_rdat3,
+		DDRAM_CLK         => DDRAM_CLK,
+		DDRAM_BURSTCNT    => DDRAM_BURSTCNT,
+		DDRAM_ADDR        => DDRAM_ADDR,
+		DDRAM_DIN         => DDRAM_DIN,
+		DDRAM_BE          => DDRAM_BE,
+		DDRAM_RD          => DDRAM_RD,
+		DDRAM_WE          => DDRAM_WE,
+		DDRAM_DOUT        => DDRAM_DOUT,
+		DDRAM_DOUT_READY  => DDRAM_DOUT_READY,
+		DDRAM_BUSY        => DDRAM_BUSY
+	);
+
 	GVRAM_CTRL_I : gvram_ctrl generic map(RAMAWIDTH-1) port map(
 		g00_addr  => g00_addr,
-		g00_rd    => g00_rd and (not gv_use_sdram),
+		g00_rd    => g00_rd and (not g00_addr(17)),
 		g00_rdat  => bram_g00_rdat,
 		g00_ack   => open,
 		g01_addr  => g01_addr,
-		g01_rd    => g01_rd and (not gv_use_sdram),
+		g01_rd    => g01_rd and (not g01_addr(17)),
 		g01_rdat  => bram_g01_rdat,
 		g01_ack   => open,
+		g02_addr  => g02_addr,
+		g02_rd    => g02_rd and (not g02_addr(17)),
+		g02_rdat  => bram_g02_rdat,
+		g02_ack   => open,
+		g03_addr  => g03_addr,
+		g03_rd    => g03_rd and (not g03_addr(17)),
+		g03_rdat  => bram_g03_rdat,
+		g03_ack   => open,
 		g10_addr  => g10_addr,
-		g10_rd    => g10_rd and (not gv_use_sdram),
+		g10_rd    => g10_rd and (not g10_addr(17)),
 		g10_rdat  => bram_g10_rdat,
 		g10_ack   => open,
 		g11_addr  => g11_addr,
-		g11_rd    => g11_rd and (not gv_use_sdram),
+		g11_rd    => g11_rd and (not g11_addr(17)),
 		g11_rdat  => bram_g11_rdat,
 		g11_ack   => open,
+		g12_addr  => g12_addr,
+		g12_rd    => g12_rd and (not g12_addr(17)),
+		g12_rdat  => bram_g12_rdat,
+		g12_ack   => open,
+		g13_addr  => g13_addr,
+		g13_rd    => g13_rd and (not g13_addr(17)),
+		g13_rdat  => bram_g13_rdat,
+		g13_ack   => open,
 		g0_caddr  => mc_g0_caddr,
-		g0_clear  => mc_g0_clear,
+		g0_clear  => mc_g0_clear and (not mc_g0_caddr(17)),
 		g1_caddr  => g1_caddr,
-		g1_clear  => g1_clear,
+		g1_clear  => g1_clear and (not g1_caddr(17)),
+		g2_caddr  => g2_caddr,
+		g2_clear  => g2_clear and (not g2_caddr(17)),
+		g3_caddr  => g3_caddr,
+		g3_clear  => g3_clear and (not g3_caddr(17)),
 		cpu_addr    => ram_addr(17 downto 0),
 		cpu_wdat    => ram_wdat,
 		cpu_rdat    => gv_cpu_rdat,
-		cpu_wr      => gv_br_cpu_wr and gv_is_gvram,
-		cpu_rd      => ram_rd and gv_is_gvram,
-		cpu_rmw     => ram_rmw and (gv_is_gvram & gv_is_gvram),
+		cpu_wr      => ram_wr and (gv_is_bram_word & gv_is_bram_word),
+		cpu_rd      => ram_rd and gv_is_bram_word,
+		cpu_rmw     => ram_rmw and (gv_is_bram_word & gv_is_bram_word),
 		cpu_rmwmask => ram_rmwmask,
 		cpu_ack     => gv_cpu_ack,
-		gmode    => vr_col,
+		gmode    => vr_GR_CMODE,
 		rclk     => ramclk,
 		ram_ce   => ram_ce,
 		vclk     => vidclk,
@@ -3282,10 +3391,14 @@ begin
 		rstn     => mem_rstn
 	);
 
-	g00_rdat <= sdram_g00_rdat when gv_use_sdram = '1' else bram_g00_rdat;
-	g01_rdat <= sdram_g01_rdat when gv_use_sdram = '1' else bram_g01_rdat;
-	g10_rdat <= sdram_g10_rdat when gv_use_sdram = '1' else bram_g10_rdat;
-	g11_rdat <= sdram_g11_rdat when gv_use_sdram = '1' else bram_g11_rdat;
+	g00_rdat <= sdram_g00_rdat when g00_addr(17) = '1' else bram_g00_rdat;
+	g01_rdat <= sdram_g01_rdat when g01_addr(17) = '1' else bram_g01_rdat;
+	g02_rdat <= sdram_g02_rdat when g02_addr(17) = '1' else bram_g02_rdat;
+	g03_rdat <= sdram_g03_rdat when g03_addr(17) = '1' else bram_g03_rdat;
+	g10_rdat <= sdram_g10_rdat when g10_addr(17) = '1' else bram_g10_rdat;
+	g11_rdat <= sdram_g11_rdat when g11_addr(17) = '1' else bram_g11_rdat;
+	g12_rdat <= sdram_g12_rdat when g12_addr(17) = '1' else bram_g12_rdat;
+	g13_rdat <= sdram_g13_rdat when g13_addr(17) = '1' else bram_g13_rdat;
 
 	process(ramclk, mem_rstn)
 	begin
@@ -3764,8 +3877,8 @@ begin
 	);
 	
 	rcpy	:rastercopy generic map(
-		arange	=>RAMAWIDTH-brsize-1,
-		brsize	=>BRSIZE
+		arange	=>RAMAWIDTH-rcpy_brsize-1,
+		brsize	=>rcpy_brsize
 	) port map(
 		src		=>vr_rcpysrc,
 		dst		=>vr_rcpydst,
@@ -3775,7 +3888,7 @@ begin
 --		stop	=>'0',
 		busy	=>vr_rcpybusy,
 		
-		t_base	=>trambase(RAMAWIDTH-1 downto brsize+1),	
+		t_base	=>trambase(RAMAWIDTH-1 downto rcpy_brsize+1),	
 		srcaddr	=>ram_cpys,
 		dstaddr	=>ram_cpyd,
 		cplane	=>ram_cplane,

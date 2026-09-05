@@ -607,7 +607,7 @@ begin
 		e_lnA5	=>'1',
 		e_lnA4	=>'0',
 		e_lnA3	=>'1',
-		e_lnA2	=>'0',
+		e_lnA2	=>'1',
 		e_lnA1	=>'1',
 		e_lnA0	=>'1',
 

@@ -446,8 +446,8 @@ begin
 		sp2rdat when sp2rdat(3 downto 0)/="0000" else
 		bg1rdat	when bg1rdat(3 downto 0)/="0000" and bgen(1)='1' else
 		sp1rdat when sp1rdat(3 downto 0)/="0000" else
-		bg1rdat when bg1rdat(7 downto 4)/="0000" and bgen(1)='1' and hres='0' else
-		bg0rdat when bg0rdat(7 downto 4)/="0000" and bgen(0)='1' else
+		bg1rdat when bgen(1)='1' and hres='0' else
+		bg0rdat when bgen(0)='1' else
 		(others=>'0');
 
 end rtl;

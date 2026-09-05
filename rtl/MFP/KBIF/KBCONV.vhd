@@ -186,6 +186,8 @@ signal	KBINT		:std_logic_vector(3 downto 0);
 signal	REPVAL		:std_logic_vector(7 downto 0);
 signal	lDATRD		:std_logic;
 signal	TXEMPb		:std_logic;
+signal	TXEMP_IRQ	:std_logic;
+signal	HOST_TX_PENDING	:std_logic;
 signal	AT_REEN		:std_logic;
 signal	END_SET		:std_logic;
 signal	TSR_UE		:std_logic;
@@ -231,7 +233,7 @@ begin
 	KB_RXED<=KB_RXEDx when KBSELx='0' else '0';
 	kbrx<=KB_RXEDx when KBSELx='1' else '0';
 	kbout<=KB_RXDAT;
-	TXEMP<= '0';
+	TXEMP<=TXEMP_IRQ;
 	
 	process(clk,rstn)begin
 		if rising_edge(clk) then
@@ -295,6 +297,8 @@ begin
 				LASTCODE<=(others=>'0');
 				SLED<=(others=>'0');
 				TXEMPb<='0';
+				TXEMP_IRQ<='0';
+				HOST_TX_PENDING<='0';
 				KBREP<=x"3";
 				KBINT<=x"4";
 				KBEN<='0';
@@ -302,6 +306,7 @@ begin
 			elsif(ce = '1')then
 				KB_WRn<='1';
 				RXDONE<='0';
+				TXEMP_IRQ<='0';
 				AT_REEN<='0';
 				END_SET<='0';
 				if(WAITCNT>0)then
@@ -374,6 +379,10 @@ begin
 						end if;
 					when KS_IDLE =>
 						TXEMPb<='1';
+						if(HOST_TX_PENDING='1' and TXEMPb='0')then
+							TXEMP_IRQ<='1';
+							HOST_TX_PENDING<='0';
+						end if;
 						if(KB_RXED='1')then
 							if(KB_RXDAT=x"e0")then
 								E0en<='1';
@@ -400,7 +409,14 @@ begin
 								WAITCNT<=2;
 							end if;
 						elsif(DATWR='1')then
+							HOST_TX_PENDING<='1';
 							if(DATIN(7 downto 6)="00")then
+								TXEMPb<='0';
+								KBSTATE<=KS_SENDDONE;
+								WAITCNT<=2;
+							elsif(DATIN(7 downto 3)="01000")then
+								-- Mouse-control command: the SCC performs the request,
+								-- but the keyboard USART transfer must still complete.
 								TXEMPb<='0';
 								KBSTATE<=KS_SENDDONE;
 								WAITCNT<=2;

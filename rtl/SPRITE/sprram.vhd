@@ -35,6 +35,9 @@ signal	pcg_cs	:std_logic;
 signal	bgv_cs	:std_logic;
 signal	pcg_wr	:std_logic_vector(1 downto 0);
 signal	bgv_wr	:std_logic_vector(1 downto 0);
+signal	spr_bwr	:std_logic_vector(1 downto 0);
+signal	spr_wrdat_h	:std_logic_vector(7 downto 0);
+signal	spr_wrdat_l	:std_logic_vector(7 downto 0);
 signal	pcgrdat	:std_logic_vector(15 downto 0);
 signal	bgvrdat	:std_logic_vector(15 downto 0);
 signal	pcg_addr:std_logic_vector(13 downto 0);
@@ -70,15 +73,21 @@ component bgvram
 END component;
 
 begin
+	spr_bwr <= "00" when b_wr="00" else "11";
+	spr_wrdat_h <= wrdat(15 downto 8) when b_wr="11" or b_wr(1)='1' else
+	               wrdat(7 downto 0);
+	spr_wrdat_l <= wrdat(7 downto 0) when b_wr="11" or b_wr(0)='1' else
+	               wrdat(15 downto 8);
+
 	pcg_cs<='1' when addr(23 downto 15)="111010111" else '0';
-	pcg_wr<=b_wr when pcg_cs='1' else "00";
+	pcg_wr<=spr_bwr when pcg_cs='1' else "00";
 
 	bgv_cs<='1' when addr(23 downto 14)="1110101111" else '0';
-	bgv_wr<=b_wr when bgv_cs='1' else "00";
+	bgv_wr<=spr_bwr when bgv_cs='1' else "00";
 
 	pcg_addr<=patno & doty & dotx(2);
-	pcgh	:pcgram port map(addr(14 downto 1),pcg_addr,sclk,vclk,wrdat(15 downto 8),(others=>'0'),pcg_wr(1) and sys_ce,'0',rddat(15 downto 8),pcgrdat(15 downto 8));
-	pcgl	:pcgram port map(addr(14 downto 1),pcg_addr,sclk,vclk,wrdat( 7 downto 0),(others=>'0'),pcg_wr(0) and sys_ce,'0',rddat( 7 downto 0),pcgrdat( 7 downto 0));
+	pcgh	:pcgram port map(addr(14 downto 1),pcg_addr,sclk,vclk,spr_wrdat_h,(others=>'0'),pcg_wr(1) and sys_ce,'0',rddat(15 downto 8),pcgrdat(15 downto 8));
+	pcgl	:pcgram port map(addr(14 downto 1),pcg_addr,sclk,vclk,spr_wrdat_l,(others=>'0'),pcg_wr(0) and sys_ce,'0',rddat( 7 downto 0),pcgrdat( 7 downto 0));
 
 	process(vclk,rstn)begin
 		if rising_edge(vclk) then
@@ -96,8 +105,8 @@ begin
 
 	datoe<='1' when pcg_cs='1' and b_rd='1' else '0';
 
-	bgvh	:bgvram port map(wrdat(15 downto 8),bg_addr,vclk,addr(13 downto 1),sclk,bgv_wr(1) and sys_ce,bgvrdat(15 downto 8));
-	bgvl	:bgvram port map(wrdat( 7 downto 0),bg_addr,vclk,addr(13 downto 1),sclk,bgv_wr(0) and sys_ce,bgvrdat( 7 downto 0));
+	bgvh	:bgvram port map(spr_wrdat_h,bg_addr,vclk,addr(13 downto 1),sclk,bgv_wr(1) and sys_ce,bgvrdat(15 downto 8));
+	bgvl	:bgvram port map(spr_wrdat_l,bg_addr,vclk,addr(13 downto 1),sclk,bgv_wr(0) and sys_ce,bgvrdat( 7 downto 0));
 	bg_VR<=bgvrdat(15);
 	bg_HR<=bgvrdat(14);
 	bg_COLOR<=bgvrdat(11 downto 8);

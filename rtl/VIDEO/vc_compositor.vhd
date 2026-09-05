@@ -152,16 +152,11 @@ begin
             end if;
         end if;
 
-        if spren = '0' and txten = '1' and tx_pal_eff = 0 then
-            rep_source := SRC_TX;
-            if unsigned(pri_tx) > unsigned(pri_gr) then
-                rep_color  := tx_color0;
-                st_present := tx_color0 /= x"0000";
-            else
-                rep_color  := (others => '0');
-                st_present := false;
-            end if;
-        end if;
+		if spren = '0' and txten = '1' and tx_pal_eff = 0 then
+			rep_source := SRC_TX;
+			rep_color  := tx_color;
+			st_present := tx_color /= x"0000";
+		end if;
 
         if pri_gr = "11" and gr_present then
             rep_source := SRC_TX;

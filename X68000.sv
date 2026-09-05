@@ -83,8 +83,6 @@ parameter CONF_STR = {
 	"P3RD,Load SRAM from SD Card;",
 	"P3RE,Save SRAM to SD Card;",
 	"P3-;",
-	"P3O[68],CPU RAM,DDR3,SDRAM;",
-	"P3-;",
 	"P3R[75],Inject SXSI driver (+reset);",
 	"P3O[76],Load SXSI driver on boot,No,Yes;",
 	"P3O[74:71],Visible Memory,Auto,1MB,2MB,3MB,4MB,5MB,6MB,7MB,8MB,9MB,10MB,11MB,12MB;",
@@ -227,14 +225,6 @@ wire [64:0] sysrtc;
 wire [21:0] gamma_bus;
 wire  [7:0] uart1_mode;
 wire [31:0] uart1_speed;
-
-wire [22:0] ddr_addr;
-wire [15:0] ddr_din;
-wire [15:0] ddr_dout;
-wire        ddr_rd;
-wire  [1:0] ddr_wr;
-wire        ddr_ack;
-wire        ddr_ready;
 
 hps_io #(.CONF_STR(CONF_STR), .PS2DIV(2400), .PS2WE(1), .VDNUM(8)) hps_io
 (
@@ -728,29 +718,6 @@ end
 
 wire disk_mode = disk_mode_r & (disk_present[0] | disk_present[1]);
 
-ddram ddram_cpu_ram
-(
-	.clk(clk_sys),
-	.rst_n(reset_n & ~reset),
-	.addr(ddr_addr),
-	.din(ddr_din),
-	.rd(ddr_rd),
-	.wr(ddr_wr),
-	.dout(ddr_dout),
-	.ack(ddr_ack),
-	.ready(ddr_ready),
-	.DDRAM_CLK(DDRAM_CLK),
-	.DDRAM_BURSTCNT(DDRAM_BURSTCNT),
-	.DDRAM_ADDR(DDRAM_ADDR),
-	.DDRAM_DIN(DDRAM_DIN),
-	.DDRAM_BE(DDRAM_BE),
-	.DDRAM_RD(DDRAM_RD),
-	.DDRAM_WE(DDRAM_WE),
-	.DDRAM_DOUT(DDRAM_DOUT),
-	.DDRAM_DOUT_READY(DDRAM_DOUT_READY),
-	.DDRAM_BUSY(DDRAM_BUSY)
-);
-
 X68K_top X68K_top
 (
 	.ramclk     (clk_ram),
@@ -782,6 +749,17 @@ X68K_top X68K_top
 	.pMemBa0(SDRAM_BA[0]),
 	.pMemAdr(SDRAM_A),
 	.pMemDat(SDRAM_DQ),
+
+	.DDRAM_CLK(DDRAM_CLK),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT),
+	.DDRAM_ADDR(DDRAM_ADDR),
+	.DDRAM_DIN(DDRAM_DIN),
+	.DDRAM_BE(DDRAM_BE),
+	.DDRAM_RD(DDRAM_RD),
+	.DDRAM_WE(DDRAM_WE),
+	.DDRAM_DOUT(DDRAM_DOUT),
+	.DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.DDRAM_BUSY(DDRAM_BUSY),
 
 	.ldr_addr(ioctl_addr[19:0]),
 	.ldr_wdat(ioctl_dout),
@@ -867,15 +845,7 @@ X68K_top X68K_top
 	.dVMode(status[46]),
 	.opm_sel(status[58]),
 	.pMidi_en(status[67]),
-	.use_ddr3(~status[68]),
 	.mix_fix(1'b1),
-	.ddr_addr(ddr_addr),
-	.ddr_din(ddr_din),
-	.ddr_dout(ddr_dout),
-	.ddr_rd(ddr_rd),
-	.ddr_wr(ddr_wr),
-	.ddr_ack(ddr_ack),
-	.ddr_ready(ddr_ready),
 	.sxsi_inject(status[75] | sxsi_boot_pulse),
 	.vis_mem(vis_mem)
 );

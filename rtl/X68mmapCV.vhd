@@ -177,8 +177,8 @@ begin
 				ldr_wdat & ldr_wdat when ldr_aen='1' else
 				m_wdat( 3 downto  0) & m_wdat( 3 downto  0) & m_wdat( 3 downto  0) & m_wdat( 3 downto  0) when gpconven='1' and vmode="00"and gpstate=gp_p0 else
 				m_wdat( 7 downto  4) & m_wdat( 7 downto  4) & m_wdat( 7 downto  4) & m_wdat( 7 downto  4) when gpconven='1' and vmode="00"and gpstate=gp_p1 else
-				m_wdat(11 downto  8) & m_wdat(11 downto  8) & m_wdat(11 downto  8) & m_wdat(11 downto  8) when gpconven='1' and vmode="00"and gpstate=gp_p2 else
-				m_wdat(15 downto 12) & m_wdat(15 downto 12) & m_wdat(15 downto 12) & m_wdat(15 downto 12) when gpconven='1' and vmode="00"and gpstate=gp_p3 else
+				m_wdat( 3 downto  0) & m_wdat( 3 downto  0) & m_wdat( 3 downto  0) & m_wdat( 3 downto  0) when gpconven='1' and vmode="00"and gpstate=gp_p2 else
+				m_wdat( 7 downto  4) & m_wdat( 7 downto  4) & m_wdat( 7 downto  4) & m_wdat( 7 downto  4) when gpconven='1' and vmode="00"and gpstate=gp_p3 else
 				m_wdat( 7 downto  0) & m_wdat( 7 downto  0) when gpconven='1' and vmode="01" and gpstate=gp_p0 else
 				m_wdat(15 downto  8) & m_wdat(15 downto  8) when gpconven='1' and vmode="01" and gpstate=gp_p2 else
 				m_wdat when atype=addr_GRAM and gfxbuf='1' else
@@ -198,8 +198,8 @@ begin
 			b_wrb when atype=addr_GRAM and gmode(1)='1' else
 			b_wrb when atype=addr_GRAM and gfxbuf='1' and m_addr(20)='0' and m_addr(19)='0' else
 			"00" when atype=addr_GRAM and gfxbuf='1' else
-			"01" when atype=addr_GRAM and gmode="01" and m_addr(20)='0' and m_addr(19)='0' and b_wrb/="00" else
-			"10" when atype=addr_GRAM and gmode="01" and m_addr(20)='0' and m_addr(19)='1' and b_wrb/="00" else
+			"01" when atype=addr_GRAM and gmode="01" and m_addr(20)='0' and m_addr(19)='0' and b_wrb(0)='1' else
+			"10" when atype=addr_GRAM and gmode="01" and m_addr(20)='0' and m_addr(19)='1' and b_wrb(0)='1' else
 			"00" when atype=addr_GRAM and gmode="00" else
 			b_wrb when atype/=addr_IO else
 			"00";
@@ -238,7 +238,10 @@ begin
 	           '1' when atype=addr_GRAM and gpconven='0' and SWen='0'
 	                and gmode="00" and b_wrb/="00"
 	                and ((gfxbuf='1' and m_addr(20 downto 19)/="00") or
-	                     (gfxbuf='0' and b_wrb(0)='0')) else '0';
+	                     (gfxbuf='0' and b_wrb(0)='0')) else
+	           '1' when atype=addr_GRAM and gpconven='0' and SWen='0'
+	                and gmode="01" and gfxbuf='0' and m_addr(20)='0'
+	                and b_wrb="10" else '0';
 
 	m_ack<=	swack	when SWen='1' else
 			gpack when gpconven='1' else
@@ -449,18 +452,29 @@ begin
 								case b_wrb is
 								when "01" | "11" =>
 									if(vmode="00")then
+										-- The CPU 256-colour page is selected by A19,
+										-- not by UDS/LDS.  A word write still carries
+										-- useful data only in its low byte.
 										gprmw<="11";
+										if(m_addr(19)='0')then
+											gpstate<=gp_p0;
+										else
+											gpstate<=gp_p2;
+										end if;
 									else
 										gpwr<="01"; -- page 0 = LOW byte
+										gpstate<=gp_p0;
 									end if;
-									gpstate<=gp_p0;
 								when "10" =>
 									if(vmode="00")then
-										gprmw<="11";
+										-- Even-address byte writes are disconnected in
+										-- the 256-colour CPU view.  Finish without RAM.
+										gpack<='1';
+										gpstate<=gp_end;
 									else
 										gpwr<="10"; -- page 1 = HIGH byte
+										gpstate<=gp_p2;
 									end if;
-									gpstate<=gp_p2;
 								when others =>
 								end case;
 							end if;
@@ -516,15 +530,23 @@ begin
 							gpstate<=gp_p2;
 							gprd<='1';
 						else
-							case b_wrb is
-							when "01" =>
+							if(vmode="00")then
+								-- In CPU 256-colour mode a word write is the
+								-- same low-byte write as LDS-only: stop after
+								-- the selected pair of graphic planes.
 								gpack<='1';
 								gpstate<=gp_end;
-							when "11" =>
-								gpstate<=gp_p2;
-								gprmw<="11";
-							when others =>
-							end case;
+							else
+								case b_wrb is
+								when "01" =>
+									gpack<='1';
+									gpstate<=gp_end;
+								when "11" =>
+									gpstate<=gp_p2;
+									gprmw<="11";
+								when others =>
+								end case;
+							end if;
 						end if;
 					when gp_p2 =>
 						if(ram_ack='1')then

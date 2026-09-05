@@ -246,6 +246,22 @@ signal	g2_hoffset_lat	:std_logic_vector(8 downto 0) := (others=>'0');
 signal	g2_voffset_lat	:std_logic_vector(8 downto 0) := (others=>'0');
 signal	g3_hoffset_lat	:std_logic_vector(8 downto 0) := (others=>'0');
 signal	g3_voffset_lat	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	t_hoffset_pending	:std_logic_vector(9 downto 0) := (others=>'0');
+signal	t_voffset_pending	:std_logic_vector(9 downto 0) := (others=>'0');
+signal	g0_hoffset_pending	:std_logic_vector(9 downto 0) := (others=>'0');
+signal	g0_voffset_pending	:std_logic_vector(9 downto 0) := (others=>'0');
+signal	g1_hoffset_pending	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	g1_voffset_pending	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	g2_hoffset_pending	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	g2_voffset_pending	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	g3_hoffset_pending	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	g3_voffset_pending	:std_logic_vector(8 downto 0) := (others=>'0');
+signal	tvaddr_pending	:std_logic_vector(9 downto 0);
+signal	g0vaddr_pending	:std_logic_vector(9 downto 0);
+signal	g1vaddr_pending	:std_logic_vector(9 downto 0);
+signal	g2vaddr_pending	:std_logic_vector(9 downto 0);
+signal	g3vaddr_pending	:std_logic_vector(9 downto 0);
+signal	taddr_pending	:std_logic_vector(arange-3 downto 0);
 signal	g40_ddat	:std_logic_vector(3 downto 0);
 signal	g41_ddat	:std_logic_vector(3 downto 0);
 signal	g42_ddat	:std_logic_vector(3 downto 0);
@@ -330,8 +346,8 @@ signal	gmixdat	:std_logic_vector(15 downto 0);
 signal	gpalin_eff	:std_logic_vector(15 downto 0);
 
 signal	rastnum	:std_logic_vector(9 downto 0);
-signal	hblank_d	:std_logic;
-signal	raster_prefetch_mode :std_logic;
+signal	hblank_d :std_logic := '1';
+signal	raster_offset_early_mode :std_logic;
 signal	raster_irq_early_mode :std_logic;
 signal  gpal0noi:std_logic_vector(7 downto 0);
 signal  gpal1noi:std_logic_vector(7 downto 0);
@@ -457,8 +473,8 @@ begin
 	vheight <= (vvend - vvbgn) when unsigned(vvend) > unsigned(vvbgn) else (others=>'0');
 
 	double_scan <= '1' when vres='0' and hfreq='1' else '0';
-	raster_prefetch_mode <= '1' when double_scan='1' and hres="00" else '0';
-	raster_irq_early_mode <= '1' when raster_prefetch_mode='1' or
+	raster_offset_early_mode <= '1' when double_scan='1' and hres="00" else '0';
+	raster_irq_early_mode <= '1' when (double_scan='1' and hres="00") or
 	                                  (hfreq='0' and vres='0' and hres="00") else
 	                         '0';
 
@@ -490,10 +506,19 @@ begin
 	tvaddr_offset<=t_voffset_lat+vaddrmod;
 	nxt_taddr<=t_base(arange-1 downto 2)+(azero(arange-1 downto 19) & tvaddr_offset & "000000");
 	cur_taddr<=cur_taddrh & thaddr_offset(9 downto 4);
+	tvaddr_pending<=t_voffset_pending+vaddrmod;
+	taddr_pending<=t_base(arange-1 downto 2)+
+	               (azero(arange-1 downto 19) & tvaddr_pending & "000000");
+	g0vaddr_pending<=g0_voffset_pending+vaddrmod when memres='1' else
+	                 '0' & (g0_voffset_pending(8 downto 0)+vaddrmod(8 downto 0));
+	g1vaddr_pending<='0' & (g1_voffset_pending+vaddrmod(8 downto 0));
+	g2vaddr_pending<='0' & (g2_voffset_pending+vaddrmod(8 downto 0));
+	g3vaddr_pending<='0' & (g3_voffset_pending+vaddrmod(8 downto 0));
 
 	process(vidclk)begin
 		if rising_edge(vidclk) then
 			if(rstn='0')then
+				hblank_d<='1';
 				t_hoffset_lat  <=(others=>'0');
 				t_voffset_lat  <=(others=>'0');
 				g0_hoffset_lat <=(others=>'0');
@@ -504,11 +529,19 @@ begin
 				g2_voffset_lat <=(others=>'0');
 				g3_hoffset_lat <=(others=>'0');
 				g3_voffset_lat <=(others=>'0');
+				t_hoffset_pending  <=(others=>'0');
+				t_voffset_pending  <=(others=>'0');
+				g0_hoffset_pending <=(others=>'0');
+				g0_voffset_pending <=(others=>'0');
+				g1_hoffset_pending <=(others=>'0');
+				g1_voffset_pending <=(others=>'0');
+				g2_hoffset_pending <=(others=>'0');
+				g2_voffset_pending <=(others=>'0');
+				g3_hoffset_pending <=(others=>'0');
+				g3_voffset_pending <=(others=>'0');
 			elsif (vid_ce = '1') then
-				if vpstart='1' or
-				   (raster_prefetch_mode='0' and hcomp='1') or
-				   (raster_prefetch_mode='1' and hblank='1' and hblank_d='0' and
-				    vaddr(0)='0') then
+				hblank_d<=hblank;
+				if vpstart='1' then
 					t_hoffset_lat  <=t_hoffset;
 					t_voffset_lat  <=t_voffset;
 					g0_hoffset_lat <=g0_hoffset;
@@ -519,21 +552,57 @@ begin
 					g2_voffset_lat <=g2_voffset;
 					g3_hoffset_lat <=g3_hoffset;
 					g3_voffset_lat <=g3_voffset;
+					t_hoffset_pending  <=t_hoffset;
+					t_voffset_pending  <=t_voffset;
+					g0_hoffset_pending <=g0_hoffset;
+					g0_voffset_pending <=g0_voffset;
+					g1_hoffset_pending <=g1_hoffset;
+					g1_voffset_pending <=g1_voffset;
+					g2_hoffset_pending <=g2_hoffset;
+					g2_voffset_pending <=g2_voffset;
+					g3_hoffset_pending <=g3_hoffset;
+					g3_voffset_pending <=g3_voffset;
+				elsif raster_offset_early_mode='1' and hblank='1' and
+				      hblank_d='0' and vaddr(0)='0' then
+					t_hoffset_pending  <=t_hoffset;
+					t_voffset_pending  <=t_voffset;
+					g0_hoffset_pending <=g0_hoffset;
+					g0_voffset_pending <=g0_voffset;
+					g1_hoffset_pending <=g1_hoffset;
+					g1_voffset_pending <=g1_voffset;
+					g2_hoffset_pending <=g2_hoffset;
+					g2_voffset_pending <=g2_voffset;
+					g3_hoffset_pending <=g3_hoffset;
+					g3_voffset_pending <=g3_voffset;
+				elsif hcomp='1' then
+					if raster_offset_early_mode='1' then
+						t_hoffset_lat  <=t_hoffset_pending;
+						t_voffset_lat  <=t_voffset_pending;
+						g0_hoffset_lat <=g0_hoffset_pending;
+						g0_voffset_lat <=g0_voffset_pending;
+						g1_hoffset_lat <=g1_hoffset_pending;
+						g1_voffset_lat <=g1_voffset_pending;
+						g2_hoffset_lat <=g2_hoffset_pending;
+						g2_voffset_lat <=g2_voffset_pending;
+						g3_hoffset_lat <=g3_hoffset_pending;
+						g3_voffset_lat <=g3_voffset_pending;
+					else
+						t_hoffset_lat  <=t_hoffset;
+						t_voffset_lat  <=t_voffset;
+						g0_hoffset_lat <=g0_hoffset;
+						g0_voffset_lat <=g0_voffset;
+						g1_hoffset_lat <=g1_hoffset;
+						g1_voffset_lat <=g1_voffset;
+						g2_hoffset_lat <=g2_hoffset;
+						g2_voffset_lat <=g2_voffset;
+						g3_hoffset_lat <=g3_hoffset;
+						g3_voffset_lat <=g3_voffset;
+					end if;
 				end if;
 			end if;
 		end if;
 	end process;
 
-	process(vidclk)begin
-		if rising_edge(vidclk) then
-			if rstn='0' then
-				hblank_d<='1';
-			elsif vid_ce='1' then
-				hblank_d<=hblank;
-			end if;
-		end if;
-	end process;
-	
 	t_ddat<=	t_rdat3(15) & t_rdat2(15) & t_rdat1(15) & t_rdat0(15) when thodly1(3 downto 0)=x"0" else
 				t_rdat3(14) & t_rdat2(14) & t_rdat1(14) & t_rdat0(14) when thodly1(3 downto 0)=x"1" else
 				t_rdat3(13) & t_rdat2(13) & t_rdat1(13) & t_rdat0(13) when thodly1(3 downto 0)=x"2" else
@@ -859,22 +928,6 @@ g80_ddat<=	g1_rdat( 7 downto 4) & g0_rdat( 3 downto 0);
 						gclrbgnrq<='0';
 					end if;
 				end if;
-				if raster_prefetch_mode='1' and hblank='1' and hblank_d='0' and
-				   vaddr(0)='0' then
-					if vblank='0' or vaddr="0000000000" then
-						nxt_trd<=ten;
-						nxt_g0rd<=g0en and (not (gclrpage(0) and gclrbusyb));
-						nxt_g1rd<=g1en and (not (gclrpage(1) and gclrbusyb));
-						nxt_g2rd<=g2en and (not (gclrpage(2) and gclrbusyb));
-						nxt_g3rd<=g3en and (not (gclrpage(3) and gclrbusyb));
-					else
-						nxt_trd<='0';
-						nxt_g0rd<='0';
-						nxt_g1rd<='0';
-						nxt_g2rd<='0';
-						nxt_g3rd<='0';
-					end if;
-				end if;
 				if(vpstart='1')then
 					haddr<=(others=>'0');
 					vaddr<=(others=>'0');
@@ -904,13 +957,26 @@ g80_ddat<=	g1_rdat( 7 downto 4) & g0_rdat( 3 downto 0);
 					vviden_int<='1';
 					hviden<= '1';--not hblank;
 				elsif(hcomp='1')then
-					cur_taddrh<=nxt_taddr(arange-3 downto 6);
-					cur_g0r1c4addrh<=nxt_g0r1c4addrh;
-					cur_g0v9<=g0vaddr_offset(9);
-					cur_g0r0c16addrh<=nxt_g0r0c16addrh;
-					cur_g1r0c16addrh<=nxt_g1r0c16addrh;
-					cur_g2r0c16addrh<=nxt_g2r0c16addrh;
-					cur_g3r0c16addrh<=nxt_g3r0c16addrh;
+					if raster_offset_early_mode='1' then
+						-- Consume the HBlank snapshot only at the normal line boundary.
+						-- This advances raster scroll changes without starting a memory
+						-- request early or changing the prefetch bank during HBlank.
+						cur_taddrh<=taddr_pending(arange-3 downto 6);
+						cur_g0r1c4addrh<=g0vaddr_pending(8 downto 0) & '0';
+						cur_g0v9<=g0vaddr_pending(9);
+						cur_g0r0c16addrh<=g0vaddr_pending(8 downto 0);
+						cur_g1r0c16addrh<=g1vaddr_pending(8 downto 0);
+						cur_g2r0c16addrh<=g2vaddr_pending(8 downto 0);
+						cur_g3r0c16addrh<=g3vaddr_pending(8 downto 0);
+					else
+						cur_taddrh<=nxt_taddr(arange-3 downto 6);
+						cur_g0r1c4addrh<=nxt_g0r1c4addrh;
+						cur_g0v9<=g0vaddr_offset(9);
+						cur_g0r0c16addrh<=nxt_g0r0c16addrh;
+						cur_g1r0c16addrh<=nxt_g1r0c16addrh;
+						cur_g2r0c16addrh<=nxt_g2r0c16addrh;
+						cur_g3r0c16addrh<=nxt_g3r0c16addrh;
+					end if;
 					haddr<=(others=>'0');
 					lvviden<=vviden;
 					raster<=raster+"0000000001";

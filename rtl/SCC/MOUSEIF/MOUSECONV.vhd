@@ -285,26 +285,26 @@ begin
 						if(REQ='1')then
 							case valX(9 downto 8) is
 							when "01" =>
-								TXDAT0(6)<='0';
+								TXDAT0(5)<='0';
 								TXDAT0(4)<='1';
 							when "10" =>
-								TXDAT0(6)<='1';
+								TXDAT0(5)<='1';
 								TXDAT0(4)<='0';
 							when others =>
-								TXDAT0(6)<='0';
+								TXDAT0(5)<='0';
 								TXDAT0(4)<='0';
 							end case;
 
 							case valY(9 downto 8) is
 							when "01" =>
 								TXDAT0(7)<='0';
-								TXDAT0(5)<='1';
+								TXDAT0(6)<='1';
 							when "10" =>
 								TXDAT0(7)<='1';
-								TXDAT0(5)<='0';
+								TXDAT0(6)<='0';
 							when others =>
 								TXDAT0(7)<='0';
-								TXDAT0(5)<='0';
+								TXDAT0(6)<='0';
 							end case;
 
 							TXDAT0(3 downto 0)<="00" & sw1 & sw0;

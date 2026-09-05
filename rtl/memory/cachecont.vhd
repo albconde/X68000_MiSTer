@@ -169,6 +169,7 @@ signal	bwcache_busy:std_logic;
 signal	brcache_clr	:std_logic_vector(brblocks-1 downto 0);
 signal	bwcache_clr0:std_logic;
 signal	bwcache_clr1:std_logic;
+signal	bw_switch_guard:std_logic;
 signal	brcache_extwr	:std_logic_vector(brblocks-1 downto 0);
 signal	waddrmin	:std_logic_vector(brsize-1 downto 0);
 signal	waddrmax	:std_logic_vector(brsize-1 downto 0);
@@ -264,6 +265,12 @@ signal	g13rwdath	:std_logic_vector(7 downto 0);
 signal	g13rwdatl	:std_logic_vector(7 downto 0);
 signal	g13rwr		:std_logic;
 
+signal	gclr_mask	:std_logic_vector(15 downto 0);
+signal	gclr_planes	:std_logic_vector(3 downto 0);
+signal	gclr_buf_q	:std_logic_vector(15 downto 0);
+signal	gclr_buf_we	:std_logic;
+signal	gclr_ramde_d	:std_logic;
+
 signal	dual_phase	:std_logic;
 
 signal	t0addrh		:std_logic_vector(awidth-9 downto 0);
@@ -332,6 +339,9 @@ type state_t is (
 	ST_G1CLR,
 	ST_G2CLR,
 	ST_G3CLR,
+	ST_GCLRDIRECT,
+	ST_GCLRREAD,
+	ST_GCLRWRITE,
 	ST_G00READ,
 	ST_G01READ,
 	ST_G02READ,
@@ -615,6 +625,9 @@ begin
 	variable nxtaddr	:std_logic_vector(awidth-9 downto 0);
 	variable f0_wrote,f1_wrote	:std_logic;
 	variable lfec_rd,lfec_wr	:std_logic_vector(2 downto 0);
+	variable clraddr	:std_logic_vector(awidth-1 downto 8);
+	variable clrmask	:std_logic_vector(15 downto 0);
+	variable clrplanes	:std_logic_vector(3 downto 0);
 	begin
 		if(rstn='0')then
 			brcache_sel<=0;
@@ -651,10 +664,14 @@ begin
 			brcache_clr<=(others=>'0');
 			bwcache_clr0<='0';
 			bwcache_clr1<='0';
+			bw_switch_guard<='0';
 			refcount<=refint-1;
 			vidcount<=0;
 			cpu_urgent_used<='0';
 			dual_phase<='0';
+			gclr_mask<=(others=>'0');
+			gclr_planes<=(others=>'0');
+			gclr_ramde_d<='0';
 			bcpend<='0';
 			bcackx<='0';
 			bcget<='0';
@@ -672,9 +689,15 @@ begin
 			--lwren<='0';
 		elsif rising_edge(rclk) then
 			if (ram_ce = '1') then
+				if RAM_STATE=ST_GCLRREAD then
+					gclr_ramde_d<=ramde;
+				else
+					gclr_ramde_d<='0';
+				end if;
 				brcache_clr<=(others=>'0');
 				bwcache_clr0<='0';
 				bwcache_clr1<='0';
+				bw_switch_guard<='0';
 				ramrd<='0';
 				ramwr<='0';
 				ramrefrsh<='0';
@@ -733,6 +756,7 @@ begin
 							end if;
 						end loop;
 						bwcache_sel<=not bwcache_sel;
+						bw_switch_guard<='1';
 						wminmaxclr<='1';
 						ramwr<='1';
 						vidcount<=0;
@@ -770,6 +794,7 @@ begin
 							ramendaddr(7 downto brsize)<=bwaddr_sel(7-brsize downto 0);
 						end if;
 						bwcache_sel<=not bwcache_sel;
+						bw_switch_guard<='1';
 						wminmaxclr<='1';
 						ramwr<='1';
 						vidcount<=0;
@@ -901,6 +926,7 @@ begin
 								ramendaddr(7 downto brsize)<=bwaddr_sel(7-brsize downto 0);
 							end if;
 							bwcache_sel<=not bwcache_sel;
+							bw_switch_guard<='1';
 							ramwr<='1';
 							vidcount<=0;
 							RAM_STATE<=ST_BWRITE;
@@ -914,6 +940,7 @@ begin
 								bwaddr1<=b_cdaddr;
 								bwcache_clr1<='1';
 							end if;
+							bw_switch_guard<='1';
 							ramaddrh<=b_csaddr(awidth-brsize-1 downto 8-brsize);
 							rambgnaddr(brsize-1 downto 0)<=(others=>'0');
 							ramendaddr(brsize-1 downto 0)<=(others=>'0');
@@ -944,6 +971,7 @@ begin
 							ramendaddr(7 downto brsize)<=bwaddr_sel(7-brsize downto 0);
 						end if;
 						bwcache_sel<=not bwcache_sel;
+						bw_switch_guard<='1';
 						wminmaxclr<='1';
 						ramwr<='1';
 						vidcount<=0;
@@ -964,38 +992,40 @@ begin
 						ramrd<='1';
 						vidcount<=0;
 						RAM_STATE<=ST_BREAD;
-					elsif(g0_caddr/=g0caddrh and g0_clear='1' and rambusy='0')then
-						g0caddrh<=g0_caddr;
-						ramaddrh<=g0_caddr(awidth-1 downto 8);
-						RAM_STATE<=ST_G0CLR;
-						rambgnaddr<=(others=>'0');
-						ramendaddr<=(others=>'1');
-						ramwr<='1';
-						dual_phase<='0';
-					elsif(g1_caddr/=g1caddrh and g1_clear='1' and rambusy='0')then
-						g1caddrh<=g1_caddr;
-						ramaddrh<=g1_caddr(awidth-1 downto 8);
-						RAM_STATE<=ST_G1CLR;
-						rambgnaddr<=(others=>'0');
-						ramendaddr<=(others=>'1');
-						ramwr<='1';
-						dual_phase<='0';
-					elsif(g2_caddr/=g2caddrh and g2_clear='1' and rambusy='0')then
-						g2caddrh<=g2_caddr;
-						ramaddrh<=g2_caddr(awidth-1 downto 8);
-						RAM_STATE<=ST_G2CLR;
-						rambgnaddr<=(others=>'0');
-						ramendaddr<=(others=>'1');
-						ramwr<='1';
-						dual_phase<='0';
-					elsif(g3_caddr/=g3caddrh and g3_clear='1' and rambusy='0')then
-						g3caddrh<=g3_caddr;
-						ramaddrh<=g3_caddr(awidth-1 downto 8);
-						RAM_STATE<=ST_G3CLR;
-						rambgnaddr<=(others=>'0');
-						ramendaddr<=(others=>'1');
-						ramwr<='1';
-						dual_phase<='0';
+					elsif(((g0_caddr/=g0caddrh and g0_clear='1') or
+					       (g1_caddr/=g1caddrh and g1_clear='1') or
+					       (g2_caddr/=g2caddrh and g2_clear='1') or
+					       (g3_caddr/=g3caddrh and g3_clear='1')) and rambusy='0')then
+						if g0_caddr/=g0caddrh and g0_clear='1' then clraddr:=g0_caddr;
+						elsif g1_caddr/=g1caddrh and g1_clear='1' then clraddr:=g1_caddr;
+						elsif g2_caddr/=g2caddrh and g2_clear='1' then clraddr:=g2_caddr;
+						else clraddr:=g3_caddr; end if;
+						clrmask:=(others=>'0'); clrplanes:=(others=>'0');
+						if g0_caddr/=g0caddrh and g0_clear='1' and g0_caddr(awidth-1 downto 9)=clraddr(awidth-1 downto 9) then
+							g0caddrh<=g0_caddr; clrplanes(0):='1';
+							if gmode="00" then clrmask:=clrmask or x"000F"; else clrmask:=clrmask or x"00FF"; end if;
+						end if;
+						if g1_caddr/=g1caddrh and g1_clear='1' and g1_caddr(awidth-1 downto 9)=clraddr(awidth-1 downto 9) then
+							g1caddrh<=g1_caddr; clrplanes(1):='1';
+							if gmode="00" then clrmask:=clrmask or x"00F0"; else clrmask:=clrmask or x"00FF"; end if;
+						end if;
+						if g2_caddr/=g2caddrh and g2_clear='1' and g2_caddr(awidth-1 downto 9)=clraddr(awidth-1 downto 9) then
+							g2caddrh<=g2_caddr; clrplanes(2):='1';
+							if gmode="00" then clrmask:=clrmask or x"0F00"; else clrmask:=clrmask or x"FF00"; end if;
+						end if;
+						if g3_caddr/=g3caddrh and g3_clear='1' and g3_caddr(awidth-1 downto 9)=clraddr(awidth-1 downto 9) then
+							g3caddrh<=g3_caddr; clrplanes(3):='1';
+							if gmode="00" then clrmask:=clrmask or x"F000"; else clrmask:=clrmask or x"FF00"; end if;
+						end if;
+						if gmode(1)='1' then clrmask:=x"FFFF"; end if;
+						gclr_mask<=clrmask; gclr_planes<=clrplanes;
+						ramaddrh<=clraddr(awidth-1 downto 8);
+						rambgnaddr<=(others=>'0'); ramendaddr<=(others=>'1'); dual_phase<='0';
+						if clrmask=x"00FF" or clrmask=x"FF00" or clrmask=x"FFFF" then
+							RAM_STATE<=ST_GCLRDIRECT; ramwr<='1';
+						else
+							RAM_STATE<=ST_GCLRREAD; ramrd<='1';
+						end if;
 					elsif(st_addr/=fde_caddr and rambusy='0')then
 						ramaddrh<=fde_caddr;
 						rambgnaddr<=(others=>'0');
@@ -1068,6 +1098,48 @@ begin
 						end if;
 						if(RAM_STATE=ST_FDEREAD)then
 							fde_sel<=not fde_sel;
+						end if;
+					end if;
+				when ST_GCLRDIRECT =>
+					if(rambusy='0')then
+						if(dual_phase='0')then
+							dual_phase<='1';
+							ramaddrh(0)<='1';
+							ramwr<='1';
+							rambgnaddr<=(others=>'0');
+							ramendaddr<=(others=>'1');
+						else
+							refcount<=refcount-1;
+							if gclr_planes(0)='1' then g00addrh<=(others=>'1'); g10addrh<=(others=>'1'); end if;
+							if gclr_planes(1)='1' then g01addrh<=(others=>'1'); g11addrh<=(others=>'1'); end if;
+							if gclr_planes(2)='1' then g02addrh<=(others=>'1'); g12addrh<=(others=>'1'); end if;
+							if gclr_planes(3)='1' then g03addrh<=(others=>'1'); g13addrh<=(others=>'1'); end if;
+							RAM_STATE<=ST_IDLE;
+						end if;
+					end if;
+				when ST_GCLRREAD =>
+					if(rambusy='0')then
+						RAM_STATE<=ST_GCLRWRITE;
+						ramwr<='1';
+						rambgnaddr<=(others=>'0');
+						ramendaddr<=(others=>'1');
+					end if;
+				when ST_GCLRWRITE =>
+					if(rambusy='0')then
+						if(dual_phase='0')then
+							dual_phase<='1';
+							ramaddrh(0)<='1';
+							RAM_STATE<=ST_GCLRREAD;
+							ramrd<='1';
+							rambgnaddr<=(others=>'0');
+							ramendaddr<=(others=>'1');
+						else
+							refcount<=refcount-1;
+							if gclr_planes(0)='1' then g00addrh<=(others=>'1'); g10addrh<=(others=>'1'); end if;
+							if gclr_planes(1)='1' then g01addrh<=(others=>'1'); g11addrh<=(others=>'1'); end if;
+							if gclr_planes(2)='1' then g02addrh<=(others=>'1'); g12addrh<=(others=>'1'); end if;
+							if gclr_planes(3)='1' then g03addrh<=(others=>'1'); g13addrh<=(others=>'1'); end if;
+							RAM_STATE<=ST_IDLE;
 						end if;
 					end if;
 				when ST_G0CLR =>
@@ -1346,22 +1418,31 @@ begin
 	BWcache0l	:CACHEMEMN generic map(brsize,8)port map(ramaddrwcb(brsize-1 downto 0),b_addr(brsize-1 downto 0),rclk,sclk,ramrdat( 7 downto 0),b_wdatm( 7 downto 0),b_cwr0 and ram_ce,bwwr0(0) and sys_ce,bwwdat0l,open);
 	BWcache1h	:CACHEMEMN generic map(brsize,8)port map(ramaddrwcb(brsize-1 downto 0),b_addr(brsize-1 downto 0),rclk,sclk,ramrdat(15 downto 8),b_wdatm(15 downto 8),b_cwr1 and ram_ce,bwwr1(1) and sys_ce,bwwdat1h,open);
 	BWcache1l	:CACHEMEMN generic map(brsize,8)port map(ramaddrwcb(brsize-1 downto 0),b_addr(brsize-1 downto 0),rclk,sclk,ramrdat( 7 downto 0),b_wdatm( 7 downto 0),b_cwr1 and ram_ce,bwwr1(0) and sys_ce,bwwdat1l,open);
+
+	gclr_buf_we<='1' when RAM_STATE=ST_GCLRREAD and
+		(ramde='1' or (gclr_ramde_d='1' and ramde='0')) else '0';
+	GCLRBUF:CACHEMEMWN generic map(awidth=>8,ramtype=>"M10K")
+		port map(ramrdat,ramaddrwc,rclk,ramaddrrc,rclk,gclr_buf_we and ram_ce,gclr_buf_q);
 	
 	ramwe<=	bwwens when RAM_STATE=ST_BWRITE else
 			"11" when RAM_STATE=ST_FDEWRITE else
 			"11" when RAM_STATE=ST_FECWRITE else
+			"01" when RAM_STATE=ST_GCLRDIRECT and gclr_mask=x"00FF" else
+			"10" when RAM_STATE=ST_GCLRDIRECT and gclr_mask=x"FF00" else
+			"11" when RAM_STATE=ST_GCLRDIRECT or RAM_STATE=ST_GCLRWRITE else
 			"01" when (RAM_STATE=ST_G0CLR or RAM_STATE=ST_G1CLR) and gmode(1)='0' else
 			"10" when (RAM_STATE=ST_G2CLR or RAM_STATE=ST_G3CLR) and gmode(1)='0' else
 			"11" when RAM_STATE=ST_G0CLR or RAM_STATE=ST_G1CLR or RAM_STATE=ST_G2CLR or RAM_STATE=ST_G3CLR else
 			"00";
-	ramwdat<=	(others=>'0') when (RAM_STATE=ST_G0CLR or RAM_STATE=ST_G1CLR or RAM_STATE=ST_G2CLR or RAM_STATE=ST_G3CLR) else
+	ramwdat<=	gclr_buf_q and (not gclr_mask) when RAM_STATE=ST_GCLRWRITE else
+				(others=>'0') when RAM_STATE=ST_GCLRDIRECT or RAM_STATE=ST_G0CLR or RAM_STATE=ST_G1CLR or RAM_STATE=ST_G2CLR or RAM_STATE=ST_G3CLR else
 				ewdat		when RAM_STATE=ST_FDEWRITE else
 				fec_wdat	when RAM_STATE=ST_FECWRITE else
 				bwwdat0h & bwwdat0l when bwcache_sel='1' else
 				bwwdat1h & bwwdat1l;
 	bwwdat<=bwwdat0h & bwwdat0l when bwcache_sel='0' else bwwdat1h & bwwdat1l;
 	
-	process(b_addr,braddr,brcache_ext,bwaddr_sel,b_wr)
+	process(b_addr,braddr,brcache_ext,bwaddr_sel,bw_switch_guard,b_wr)
 	variable tmp	:std_logic;
 	begin
 		tmp:='1';
@@ -1370,7 +1451,8 @@ begin
 				tmp:='0';
 			end if;
 		end loop;
-		if(tmp='1' and b_addr(awidth-1 downto brsize)=bwaddr_sel and b_wr/="00")then
+		if(tmp='1' and bw_switch_guard='0' and
+		   b_addr(awidth-1 downto brsize)=bwaddr_sel and b_wr/="00")then
 			bwack<='1';
 		else
 			bwack<='0';
@@ -1399,7 +1481,8 @@ begin
 					rmw_rdat<=b_rdatb;
 					rmw_state<=rmw_MOD;
 				when rmw_MOD =>
-					if(b_addr(awidth-1 downto brsize)=bwaddr_sel)then
+					if(bw_switch_guard='0' and
+					   b_addr(awidth-1 downto brsize)=bwaddr_sel)then
 						rmw_state<=rmw_WRITE;
 					end if;
 				when rmw_WRITE =>

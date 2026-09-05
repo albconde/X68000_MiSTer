@@ -1464,8 +1464,19 @@ begin
 							busreq<='0';
 							STATE<=ST_IDLE;
 						else
-							busreq<='0';
-							STATE<=ST_RQWAIT;
+							if OCR_SIZE="10" then
+								case OCR_REQG is
+								when "00" | "01" =>
+									STATE<=ST_BUSWAIT;
+									reqwait<='1';
+								when others =>
+									busreq<='0';
+									STATE<=ST_RQWAIT;
+								end case;
+							else
+								busreq<='0';
+								STATE<=ST_RQWAIT;
+							end if;
 						end if;
 					when others =>
 						STATE<=ST_IDLE;
